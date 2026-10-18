@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>Sky Duel 3D</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#72c9f3;font-family:system-ui,Arial,sans-serif;touch-action:none;user-select:none}canvas{display:block}
+#hud{position:fixed;inset:0;pointer-events:none;color:#fff;text-shadow:0 2px 3px #123}
+.top{position:absolute;top:max(10px,env(safe-area-inset-top));left:10px;right:10px;display:flex;justify-content:space-between;gap:7px;align-items:flex-start}
+.pill{background:#092b50bb;border:1px solid #ffffff65;border-radius:13px;padding:7px 11px;min-width:75px;backdrop-filter:blur(5px)}
+.small{font-size:10px;letter-spacing:.09em;font-weight:800;opacity:.85}.value{font-size:19px;font-weight:900;line-height:1.25}
+#status{position:absolute;top:76px;left:50%;transform:translateX(-50%);white-space:nowrap;background:#092b50b8;border:1px solid #ffffff50;border-radius:99px;padding:6px 11px;font-size:11px}
+#stick,#knob,.action{display:none}
+#touchHint{position:fixed;bottom:max(18px,env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);padding:8px 12px;border-radius:12px;background:#092b50a8;color:#fff;font-size:11px;text-align:center;pointer-events:none;text-shadow:0 1px 2px #123}
+#overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;padding:18px;background:linear-gradient(#07203c30,#061629b8);color:white}
+.card{width:min(440px,100%);padding:24px 22px;text-align:center;border-radius:23px;background:#06192beF;border:1px solid #ffffff45;box-shadow:0 20px 60px #0006}
+h1{font-size:clamp(34px,9vw,48px);letter-spacing:-.05em;margin:0 0 3px}.sub{opacity:.82;margin:0 0 16px}
+.instructions{text-align:left;font-size:14px;line-height:1.55;color:#e1f2ff;margin:18px 0}
+.primary,.secondary{width:100%;border:0;border-radius:13px;padding:14px 18px;font-size:16px;font-weight:900}
+.primary{background:#ff674f;color:white}.secondary{margin-top:8px;background:#ffffff18;border:1px solid #ffffff35;color:white;padding:10px}
+#multiplayer{margin-top:10px;padding-top:10px;border-top:1px solid #ffffff30}#roomInfo{font-size:12px;line-height:1.45;margin:8px 0;overflow-wrap:anywhere}#qr{width:150px;height:150px;max-width:55vw;background:white;padding:6px;border-radius:8px;display:none;margin:8px auto}#joinRow{display:flex;gap:6px;margin-top:8px}#joinCode{min-width:0;width:65%;border-radius:10px;border:1px solid #ffffff50;background:#ffffff12;color:white;padding:10px;font-size:14px}#joinBtn,#hostBtn{cursor:pointer}
+#toast{position:fixed;top:40%;left:50%;transform:translate(-50%,-50%);font-size:28px;font-weight:950;opacity:0;transition:opacity .12s;pointer-events:none;text-shadow:0 3px 8px #123}
+@media(min-width:700px){#stick{width:140px;height:140px}#knob{left:44px;top:44px}.action{width:96px;height:96px}}
+</style>
+</head>
+<body>
+<div id="hud">
+ <div class="top">
+  <div class="pill"><div class="small">SCORE</div><div class="value" id="score">0</div></div>
+  <div class="pill"><div class="small">LIVES</div><div class="value" id="lives">♥ ♥ ♥</div></div>
+  <div class="pill"><div class="small">TIME</div><div class="value" id="time">2:00</div></div>
+ </div>
+ <div id="status">3D DOGFIGHT • Find a rival</div>
+</div>
+<div id="touchHint">Tilt phone to steer • Tap to fire • Hold screen to boost</div>
+<div id="toast"></div>
+<div id="overlay"><div class="card">
+ <h1>SKY DUEL 3D</h1><p class="sub">Real 3D arcade dogfighting</p>
+ <div class="instructions"><b>Steer:</b> tilt your phone left/right to turn and forward/back to climb or dive.<br><b>Fire:</b> tap the screen to shoot.<br><b>Boost:</b> press and hold the screen to boost.<br><br>Chase red enemy aircraft over a 3D tropical island, shoot them down, and survive for two minutes.</div>
+ <button class="primary" id="start">TAKE OFF</button>
+ <button class="secondary" id="help">Enable phone motion controls</button>
+ <div id="multiplayer">
+  <button class="secondary" id="hostBtn">HOST ONLINE MATCH</button>
+  <div id="roomInfo">Free peer-to-peer multiplayer. Host must open this game from a public HTTPS website for QR joining.</div>
+  <img id="qr" alt="QR code to join the match">
+  <div id="joinRow"><input id="joinCode" placeholder="Host room code" autocomplete="off"><button class="secondary" id="joinBtn">JOIN</button></div>
+ </div>
+ <div style="font-size:11px;opacity:.65;margin-top:12px">Requires an internet connection to load the 3D engine.</div>
+</div></div>
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script>
+(()=>{'use strict';
+const $=id=>document.getElementById(id);
+const overlay=$('overlay'),toast=$('toast'),status=$('status');
+let scene,camera,renderer,clock,player,playerProp,enemies=[],bullets=[],effects=[],islands=[];
+let running=false,score=0,lives=3,timeLeft=120,fireHeld=false,boostHeld=false,stick={x:0,y:0},keys={},shotCooldown=0,spawnCooldown=0,invulnerable=0,frameHandle=0;
+let motionEnabled=false, tiltX=0, tiltY=0, neutralGamma=null, neutralBeta=null, gestureTimer=null, gestureBoost=false, gesturePointer=null;
+// Multiplayer uses free PeerJS signaling and direct browser data connections.
+let netPeer=null, netHost=false, netRoom='', netConnections=new Map(), remotePlanes=new Map(), remoteState=new Map(), netSendTimer=0, netShotSeq=0, myNetId='', netScore=0;
+const NET_MAX_PLAYERS=8;
+function roomStatus(t){$('roomInfo').textContent=t;}
+function netSend(data){if(netHost){handleNetMessage(myNetId,data);for(const c of netConnections.values())if(c.open)c.send(data);}else{const c=netConnections.get(netRoom);if(c&&c.open)c.send(data);}}
+function connectToHost(id){
+ if(!window.Peer){roomStatus('Multiplayer library did not load. Check internet and reload.');return;}
+ if(netPeer){try{netPeer.destroy()}catch(e){}}
+ netHost=false;netRoom=id.trim();roomStatus('Connecting to host '+netRoom+'…');
+ netPeer=new Peer();
+ netPeer.on('open',ownId=>{myNetId=ownId;const c=netPeer.connect(netRoom,{reliable:true});netConnections.set(netRoom,c);wireConnection(c);});
+ netPeer.on('error',e=>roomStatus('Connection error: '+(e.type||e.message||'unknown')+'. Check that the host is online.'));
+ netPeer.on('disconnected',()=>roomStatus('Connection interrupted. Reconnecting…'));
+}
+function hostOnlineMatch(){
+ if(!window.Peer){roomStatus('Multiplayer library did not load. Check internet and reload.');return;}
+ if(location.protocol!=='https:'&&location.hostname!=='localhost'&&location.hostname!=='127.0.0.1'){
+  roomStatus('To let other phones join, publish this HTML as a free HTTPS website (for example GitHub Pages), then open that website here.');return;
+ }
+ if(netPeer){try{netPeer.destroy()}catch(e){}}
+ netHost=true;netConnections.clear();remoteState.clear();
+ netPeer=new Peer();roomStatus('Creating your room…');
+ netPeer.on('open',id=>{
+  myNetId=id;netRoom=id;
+  const joinUrl=new URL(location.href);joinUrl.searchParams.set('join',id);
+  $('joinCode').value=id;$('qr').src='https://api.qrserver.com/v1/create-qr-code/?size=220x220&data='+encodeURIComponent(joinUrl.href);$('qr').style.display='block';
+  roomStatus('Room ready! Scan the QR code or share this room code. Players: 1/'+NET_MAX_PLAYERS+'.');
+ });
+ netPeer.on('connection',c=>{if(netConnections.size>=NET_MAX_PLAYERS-1){c.on('open',()=>c.send({type:'full'}));c.close();return;}netConnections.set(c.peer,c);wireConnection(c);});
+ netPeer.on('error',e=>roomStatus('Host error: '+(e.type||e.message||'unknown')));
+}
+function wireConnection(c){
+ c.on('open',()=>{if(netHost){c.send({type:'welcome',host:myNetId});}else{roomStatus('Connected! Waiting for the host to start.');c.send({type:'hello',id:myNetId});}});
+ c.on('data',data=>{
+  if(data&&data.type==='full'){roomStatus('This room is full (maximum 8 players).');return;}
+  if(netHost){handleNetMessage(c.peer,data);for(const [id,other] of netConnections)if(id!==c.peer&&other.open)other.send(data);}
+  else handleNetMessage('host',data);
+ });
+ c.on('close',()=>{netConnections.delete(c.peer);removeRemote(c.peer);if(netHost)updateRoomCount();else roomStatus('Disconnected from host.');});
+ c.on('error',()=>{});
+}
+function updateRoomCount(){if(netHost)roomStatus('Room ready! Scan the QR code or share this room code. Players: '+(netConnections.size+1)+'/'+NET_MAX_PLAYERS+'.');}
+function removeRemote(id){const p=remotePlanes.get(id);if(p&&scene)scene.remove(p);remotePlanes.delete(id);remoteState.delete(id);updateRoomCount();}
+function handleNetMessage(sender,d){
+ if(!d||typeof d!=='object')return;
+ if(d.type==='hello'){updateRoomCount();if(netHost){const welcome={type:'welcome',host:myNetId};const c=netConnections.get(sender);if(c&&c.open)c.send(welcome);}return;}
+ if(d.type==='welcome'){roomStatus('Connected to host! Players will appear when the match starts.');return;}
+ if(d.type==='state'&&d.id!==myNetId){remoteState.set(d.id,d);return;}
+ if(d.type==='shot'&&d.id!==myNetId){showRemoteShot(d);return;}
+ if(d.type==='hit'&&d.target===myNetId){lives=Math.max(0,lives-1);invulnerable=1.7;if(player)explosion(player.position,0xff716b);toastMsg('HIT BY PLAYER');if(lives<=0&&running){updateHud();endGame('AIRCRAFT LOST');}return;}
+ if(d.type==='hit'&&d.shooter===myNetId){score+=100;toastMsg('+100 PLAYER HIT');updateHud();return;}
+ if(d.type==='hit'&&netHost){netSend(d);}
+}
+function showRemoteShot(d){
+ if(!scene||!d.pos||!d.dir)return;
+ const mesh=new THREE.Mesh(new THREE.SphereGeometry(.42,6,5),new THREE.MeshBasicMaterial({color:0xffef9b}));mesh.position.set(d.pos.x,d.pos.y,d.pos.z);scene.add(mesh);
+ const vel=new THREE.Vector3(d.dir.x,d.dir.y,d.dir.z).multiplyScalar(245);
+ bullets.push({mesh,owner:null,vel,life:2,player:false,remote:true,shooter:d.id,shotId:d.seq});
+}
+function syncNetwork(dt){
+ if(!netPeer||!netPeer.open||!player)return;
+ netSendTimer-=dt;
+ if(netSendTimer<=0){netSendTimer=.06;
+  const state={type:'state',id:myNetId,pos:{x:player.position.x,y:player.position.y,z:player.position.z},rot:{x:player.rotation.x,y:player.rotation.y,z:player.rotation.z},score,lives};
+  if(netHost){remoteState.set(myNetId,state);for(const c of netConnections.values())if(c.open)c.send(state);}else netSend(state);
+  for(const [id,d] of remoteState){if(id===myNetId)continue;let plane=remotePlanes.get(id);if(!plane&&scene){plane=makePlane(0x21c9a7,1.05);scene.add(plane);remotePlanes.set(id,plane);}if(plane){plane.position.set(d.pos.x,d.pos.y,d.pos.z);plane.rotation.set(d.rot.x,d.rot.y,d.rot.z,'YXZ');plane.userData.prop.rotation.z+=dt*24;}}
+ }
+}
+function broadcastShot(){if(!netPeer||!netPeer.open||!player)return;const dir=V(0,0,1).applyQuaternion(player.quaternion).normalize();netSend({type:'shot',id:myNetId,seq:++netShotSeq,pos:{x:player.position.x+dir.x*3.3,y:player.position.y+dir.y*3.3,z:player.position.z+dir.z*3.3},dir:{x:dir.x,y:dir.y,z:dir.z}});}
+
+const V=(x=0,y=0,z=0)=>new THREE.Vector3(x,y,z);
+const rand=(a,b)=>a+Math.random()*(b-a);
+const clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
+const worldUp=V(0,1,0);
+function material(color,roughness=.75,metalness=0){return new THREE.MeshStandardMaterial({color,roughness,metalness});}
+function makePlane(color,scale=1){
+ const root=new THREE.Group();
+ const fus=new THREE.Mesh(new THREE.CapsuleGeometry(.34*scale,2.1*scale,5,8),material(color,.4,.25));fus.rotation.x=Math.PI/2;fus.position.y=0;root.add(fus);
+ const wing=new THREE.Mesh(new THREE.BoxGeometry(4.0*scale,.12*scale,.75*scale),material(color,.45,.2));wing.position.z=-.05*scale;root.add(wing);
+ const tail=new THREE.Mesh(new THREE.BoxGeometry(1.35*scale,.09*scale,.42*scale),material(color,.45,.2));tail.position.set(0,.22*scale,-1.12*scale);root.add(tail);
+ const fin=new THREE.Mesh(new THREE.BoxGeometry(.12*scale,.62*scale,.48*scale),material(color,.45,.2));fin.position.set(0,.36*scale,-1.1*scale);root.add(fin);
+ const cockpit=new THREE.Mesh(new THREE.SphereGeometry(.29*scale,12,8),new THREE.MeshStandardMaterial({color:0x8ceaff,metalness:.25,roughness:.18,transparent:true,opacity:.9}));
+ cockpit.scale.set(.8,.65,1.55);cockpit.position.set(0,.22*scale,.32*scale);root.add(cockpit);
+ const prop=new THREE.Group();prop.position.set(0,0,1.45*scale);root.add(prop);
+ const hub=new THREE.Mesh(new THREE.SphereGeometry(.12*scale,8,6),material(0xdce7ef,.25,.5));prop.add(hub);
+ for(let i=0;i<2;i++){const blade=new THREE.Mesh(new THREE.BoxGeometry(.1*scale,.9*scale,.08*scale),material(0x263e51,.4,.4));blade.rotation.z=i*Math.PI/2;prop.add(blade);}
+ root.userData.prop=prop;return root;
+}
+function makeIsland(x,z,rx,rz){
+ const group=new THREE.Group();group.position.set(x,-1.2,z);
+ const base=new THREE.Mesh(new THREE.CylinderGeometry(rx*.76,rx,rand(8,18),9,1),material(0x8caa69));base.scale.z=rz/rx;base.position.y=2;group.add(base);
+ const hill=new THREE.Mesh(new THREE.ConeGeometry(rx*.52,rand(22,40),8),material(Math.random()>.5?0x5b9860:0x719d58));hill.position.y=base.position.y+rand(10,18);hill.scale.z=rz/rx;group.add(hill);
+ const beach=new THREE.Mesh(new THREE.CylinderGeometry(rx*.88,rx*.9,2,10),material(0xd7c88b));beach.scale.z=rz/rx;beach.position.y=0;group.add(beach);
+ for(let i=0;i<Math.floor(rx/14);i++){const tree=new THREE.Group();const trunk=new THREE.Mesh(new THREE.CylinderGeometry(.45,.65,3,5),material(0x73502c));trunk.position.y=3;tree.add(trunk);const crown=new THREE.Mesh(new THREE.ConeGeometry(rand(2,4),rand(5,8),5),material(0x28794b));crown.position.y=6;tree.add(crown);tree.position.set(rand(-rx*.65,rx*.65),0,rand(-rz*.65,rz*.65));group.add(tree);}
+ scene.add(group);islands.push({group,x,z,rx,rz});
+}
+function setup(){
+ if(renderer)return;
+ scene=new THREE.Scene();scene.background=new THREE.Color(0x78c9f5);scene.fog=new THREE.Fog(0x78c9f5,260,1500);
+ camera=new THREE.PerspectiveCamera(68,innerWidth/innerHeight,.1,2500);
+ renderer=new THREE.WebGLRenderer({antialias:false,powerPreference:'high-performance'});renderer.setPixelRatio(Math.min(devicePixelRatio||1,1.5));renderer.setSize(innerWidth,innerHeight);renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.12;document.body.insertBefore(renderer.domElement,document.body.firstChild);
+ scene.add(new THREE.HemisphereLight(0xc8edff,0x51734a,2.0));
+ const sun=new THREE.DirectionalLight(0xfff1d5,2.5);sun.position.set(-200,350,120);scene.add(sun);
+ const sea=new THREE.Mesh(new THREE.PlaneGeometry(5000,5000,1,1),new THREE.MeshStandardMaterial({color:0x138fc4,roughness:.34,metalness:.08}));sea.rotation.x=-Math.PI/2;sea.position.y=-12;scene.add(sea);
+ // Subtle ocean grid/wave highlights.
+ const waveMat=new THREE.MeshBasicMaterial({color:0x73d9f2,transparent:true,opacity:.14});
+ for(let i=0;i<90;i++){const wave=new THREE.Mesh(new THREE.RingGeometry(rand(2,6),rand(6,12),24),waveMat);wave.rotation.x=-Math.PI/2;wave.position.set(rand(-1200,1200),-11.85,rand(-1200,1200));scene.add(wave);}
+ for(let i=0;i<16;i++)makeIsland(rand(-850,850),rand(-1000,800),rand(35,100),rand(30,90));
+ const sunBall=new THREE.Mesh(new THREE.SphereGeometry(18,12,10),new THREE.MeshBasicMaterial({color:0xfff1bc}));sunBall.position.set(-500,280,-900);scene.add(sunBall);
+ for(let i=0;i<20;i++){const cloud=new THREE.Group();for(let j=0;j<5;j++){const puff=new THREE.Mesh(new THREE.SphereGeometry(rand(8,18),8,6),new THREE.MeshStandardMaterial({color:0xffffff,roughness:1,transparent:true,opacity:.72}));puff.position.set(rand(-22,22),rand(-3,5),rand(-12,12));cloud.add(puff);}cloud.position.set(rand(-1000,1000),rand(55,180),rand(-1200,700));scene.add(cloud);}
+ player=makePlane(0x1678e8,1.25);scene.add(player);player.position.set(0,35,0);
+ playerProp=player.userData.prop;
+ clock=new THREE.Clock();
+ addEventListener('resize',onResize);
+}
+function onResize(){if(!renderer)return;camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);renderer.setPixelRatio(Math.min(devicePixelRatio||1,1.5));}
+function spawnEnemy(initial=false){
+ const e=makePlane(0xe34c43,.95);scene.add(e);
+ const angle=rand(0,Math.PI*2),distance=initial?rand(170,300):rand(280,430);
+ e.position.copy(player.position).add(V(Math.cos(angle)*distance,rand(-35,35),Math.sin(angle)*distance));
+ e.rotation.order='YXZ';e.rotation.y=rand(0,Math.PI*2);e.userData={hp:3,speed:rand(48,67),cooldown:rand(.6,1.8),dead:false,turn:0,prop:e.userData.prop};
+ const marker=new THREE.Mesh(new THREE.ConeGeometry(2.2,5,3),new THREE.MeshBasicMaterial({color:0xff382e}));marker.position.y=8;e.add(marker);
+ enemies.push(e);
+}
+function clearGameObjects(){for(const e of enemies)scene.remove(e);for(const b of bullets)scene.remove(b.mesh);for(const fx of effects)scene.remove(fx.mesh);enemies=[];bullets=[];effects=[];islands.forEach(i=>scene.remove(i.group));islands=[];}
+function resetGame(){
+ clearGameObjects();score=0;lives=3;timeLeft=120;shotCooldown=0;spawnCooldown=0;invulnerable=1.5;
+ player.position.set(0,35,0);player.rotation.set(0,0,0);player.rotation.order='YXZ';player.userData.velocity=V(0,0,-85);
+ for(let i=0;i<16;i++)makeIsland(rand(-850,850),rand(-1000,800),rand(35,100),rand(30,90));
+ for(let i=0;i<5;i++)spawnEnemy(true);updateHud();
+}
+function updateHud(){$('score').textContent=score;$('lives').textContent=Array.from({length:3},(_,i)=>i<lives?'♥':'♡').join(' ');$('time').textContent=Math.floor(Math.max(0,timeLeft)/60)+':'+String(Math.floor(Math.max(0,timeLeft)%60)).padStart(2,'0');}
+function toastMsg(t){toast.textContent=t;toast.style.opacity='1';clearTimeout(toastMsg.timer);toastMsg.timer=setTimeout(()=>toast.style.opacity='0',650);}
+function addBullet(owner){
+ const isPlayer=owner===player;const direction=V(0,0,1).applyQuaternion(owner.quaternion).normalize();
+ const start=owner.position.clone().add(direction.clone().multiplyScalar(3.3));
+ const mesh=new THREE.Mesh(new THREE.SphereGeometry(isPlayer?.42:.5,6,5),new THREE.MeshBasicMaterial({color:isPlayer?0xffef9b:0xff453d}));
+ mesh.position.copy(start);scene.add(mesh);
+ bullets.push({mesh,owner,vel:direction.multiplyScalar(isPlayer?245:170),life:2.0,player:isPlayer});
+}
+function explosion(pos,color=0xffa45b){
+ for(let i=0;i<11;i++){const mesh=new THREE.Mesh(new THREE.SphereGeometry(rand(.35,.8),5,4),new THREE.MeshBasicMaterial({color,transparent:true}));mesh.position.copy(pos);scene.add(mesh);effects.push({mesh,vel:V(rand(-1,1),rand(-.5,1),rand(-1,1)).multiplyScalar(rand(12,35)),life:rand(.25,.65),max:.65});}
+}
+function update(dt){
+ if(!running)return;
+ syncNetwork(dt);
+ timeLeft-=dt;if(timeLeft<=0){timeLeft=0;updateHud();endGame('TIME UP');return;}
+ const keyboardX=(keys.ArrowRight||keys.d?1:0)-(keys.ArrowLeft||keys.a?1:0);
+ const keyboardY=(keys.ArrowDown||keys.s?1:0)-(keys.ArrowUp||keys.w?1:0);
+ const sx=motionEnabled?tiltX:keyboardX;
+ const sy=motionEnabled?tiltY:keyboardY;
+ // Flight is genuinely three-dimensional: yaw, pitch, bank, and forward motion.
+ player.rotation.order='YXZ';
+ player.rotation.y-=sx*1.65*dt;
+ player.rotation.x=THREE.MathUtils.lerp(player.rotation.x,sy*.55,Math.min(1,dt*3));
+ player.rotation.z=THREE.MathUtils.lerp(player.rotation.z,sx*.65,Math.min(1,dt*4));
+ const boost=boostHeld||gestureBoost||keys.Shift;const speed=boost?150:91;
+ const forward=V(0,0,1).applyQuaternion(player.quaternion).normalize();
+ const vel=player.userData.velocity;vel.lerp(forward.multiplyScalar(speed),Math.min(1,dt*1.8));player.position.addScaledVector(vel,dt);
+ player.position.y=clamp(player.position.y,-35,175);
+ playerProp.rotation.z+=dt*(boost?32:22);
+ invulnerable=Math.max(0,invulnerable-dt);
+ shotCooldown-=dt;if((fireHeld||keys[' '])&&shotCooldown<=0){addBullet(player);broadcastShot();shotCooldown=.13;}
+ spawnCooldown-=dt;if(enemies.length<6&&spawnCooldown<=0){spawnEnemy();spawnCooldown=1.3;}
+ for(const e of enemies){
+  const toPlayer=player.position.clone().sub(e.position);const distance=toPlayer.length();toPlayer.normalize();
+  const desiredYaw=Math.atan2(toPlayer.x,toPlayer.z);
+  let diff=Math.atan2(Math.sin(desiredYaw-e.rotation.y),Math.cos(desiredYaw-e.rotation.y));
+  e.rotation.y+=clamp(diff,-1.25*dt,1.25*dt);
+  const desiredPitch=clamp(Math.atan2(toPlayer.y,Math.max(1,distance)),-.4,.4);
+  e.rotation.x=THREE.MathUtils.lerp(e.rotation.x,desiredPitch,Math.min(1,dt*1.5));
+  e.rotation.z=THREE.MathUtils.lerp(e.rotation.z,-clamp(diff,-.7,.7)*.6,Math.min(1,dt*2));
+  const ef=V(0,0,1).applyQuaternion(e.quaternion).normalize();e.position.addScaledVector(ef,e.userData.speed*dt);e.userData.prop.rotation.z+=dt*25;
+  e.userData.cooldown-=dt;if(e.userData.cooldown<=0&&Math.abs(diff)<.55&&distance<340){addBullet(e);e.userData.cooldown=rand(.8,1.45);}
+ }
+ for(const b of bullets){
+  b.mesh.position.addScaledVector(b.vel,dt);b.life-=dt;
+  if(b.player){for(const e of enemies){if(e.userData.dead)continue;if(b.mesh.position.distanceTo(e.position)<5.2){e.userData.hp--;b.life=0;explosion(b.mesh.position,0xffe29a);if(e.userData.hp<=0){e.userData.dead=true;score+=100;explosion(e.position);toastMsg('+100');scene.remove(e);}break;}}}
+  else if(invulnerable<=0&&b.mesh.position.distanceTo(player.position)<5){b.life=0;if(b.remote&&b.shooter){netSend({type:'hit',target:myNetId,shooter:b.shooter});}lives--;invulnerable=1.7;explosion(player.position,0x77dfff);toastMsg(b.remote?'PLAYER HIT!':'HIT!');if(lives<=0){lives=0;updateHud();endGame('AIRCRAFT LOST');return;}}
+ }
+ bullets=bullets.filter(b=>{if(b.life<=0){scene.remove(b.mesh);return false;}return true;});
+ enemies=enemies.filter(e=>!e.userData.dead);
+ for(const fx of effects){fx.mesh.position.addScaledVector(fx.vel,dt);fx.vel.multiplyScalar(Math.pow(.94,dt*60));fx.life-=dt;fx.mesh.material.opacity=clamp(fx.life/fx.max,0,1);}
+ effects=effects.filter(fx=>{if(fx.life<=0){scene.remove(fx.mesh);return false;}return true;});
+ // Chase camera trails behind the aircraft and looks forward into the flight path.
+ const back=V(0,7,-20).applyQuaternion(player.quaternion);
+ const desiredCamera=player.position.clone().add(back);
+ camera.position.lerp(desiredCamera,Math.min(1,dt*4.2));
+ const look=player.position.clone().add(V(0,1,25).applyQuaternion(player.quaternion));
+ camera.lookAt(look);
+ // Move scenery around a huge playable area; re-seed islands when left far behind.
+ for(const i of islands){if(i.group.position.distanceTo(player.position)>1500){i.group.position.x=player.position.x+rand(-800,800);i.group.position.z=player.position.z+rand(-900,500);}}
+ updateHud();
+}
+function endGame(title){running=false;overlay.style.display='flex';overlay.querySelector('h1').textContent=title;overlay.querySelector('.sub').textContent='Final score: '+score;overlay.querySelector('.instructions').innerHTML='<b>Score:</b> '+score+' points<br>Fly again and see if you can beat your score.';$('start').textContent='FLY AGAIN';}
+function startGame(){setup();resetGame();running=true;overlay.style.display='none';overlay.querySelector('h1').textContent='SKY DUEL 3D';overlay.querySelector('.sub').textContent='Real 3D arcade dogfighting';clock.getDelta();}
+function animate(){frameHandle=requestAnimationFrame(animate);const dt=Math.min(clock?clock.getDelta():0,.04);if(scene&&renderer){update(dt);if(player&&invulnerable>0)player.visible=Math.floor(performance.now()/100)%2===0;else if(player)player.visible=true;renderer.render(scene,camera);}}
+$('start').addEventListener('click',()=>{if(!window.THREE){overlay.querySelector('.sub').textContent='Could not load the 3D engine. Check your internet connection and reload.';return;}startGame();});
+$('hostBtn').addEventListener('click',hostOnlineMatch);
+$('joinBtn').addEventListener('click',()=>{const id=$('joinCode').value.trim();if(id)connectToHost(id);else roomStatus('Scan the host QR code or enter the room code first.');});
+$('help').addEventListener('click',()=>toastMsg('WASD / arrows • Space • Shift'));
+function enableMotion(){
+ const enable=()=>{
+  if(!('DeviceOrientationEvent' in window)){toastMsg('Motion sensors not supported');return;}
+  const begin=()=>{motionEnabled=true;neutralGamma=null;neutralBeta=null;toastMsg('Tilt controls enabled');};
+  if(typeof DeviceOrientationEvent.requestPermission==='function'){
+   DeviceOrientationEvent.requestPermission().then(result=>{if(result==='granted')begin();else toastMsg('Motion permission denied');}).catch(()=>toastMsg('Could not enable motion'));
+  }else begin();
+ };
+ enable();
+}
+$('help').addEventListener('click',enableMotion);
+// Calibrate to the phone's orientation when motion controls are enabled.
+// Moderate tilts map to steering; neutral position remains easy to hold.
+addEventListener('deviceorientation',e=>{
+ if(!motionEnabled||e.gamma==null||e.beta==null)return;
+ if(neutralGamma===null){neutralGamma=e.gamma;neutralBeta=e.beta;}
+ const gamma=e.gamma-neutralGamma, beta=e.beta-neutralBeta;
+ tiltX=clamp(gamma/28,-1,1);
+ tiltY=clamp(-beta/32,-1,1);
+});
+document.addEventListener('pointerdown',e=>{
+ if(!running||overlay.style.display!=='none')return;
+ if(e.target.closest('button'))return;
+ gesturePointer=e.pointerId;gestureBoost=false;fireHeld=false;
+ clearTimeout(gestureTimer);
+ gestureTimer=setTimeout(()=>{gestureBoost=true;},170);
+});
+document.addEventListener('pointerup',e=>{
+ if(e.pointerId!==gesturePointer)return;
+ clearTimeout(gestureTimer);
+ if(!gestureBoost&&running){addBullet(player);broadcastShot();shotCooldown=.13;}
+ gestureBoost=false;gesturePointer=null;
+});
+document.addEventListener('pointercancel',()=>{clearTimeout(gestureTimer);gestureBoost=false;gesturePointer=null;});
+addEventListener('keydown',e=>{keys[e.key]=true;if([' ','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key))e.preventDefault();});
+addEventListener('keyup',e=>keys[e.key]=false);document.addEventListener('contextmenu',e=>e.preventDefault());
+if(!window.THREE){$('status').textContent='Internet needed to load 3D engine';}
+const joinParam=new URLSearchParams(location.search).get('join');if(joinParam){$('joinCode').value=joinParam;roomStatus('Joining the host…');setTimeout(()=>connectToHost(joinParam),500);}
+animate();
+})();
+</script>
+</body>
+</html>
